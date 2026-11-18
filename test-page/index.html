@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo Confirmation Agent · test call</title>
+<style>
+  :root { --bg:#f6f5f1; --card:#fff; --ink:#1c1b19; --mute:#6b6862; --line:#dedbd3; --go:#0f7a55; --stop:#b3261e; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 system-ui, "Segoe UI", sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 28px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--mute); margin: 0 0 22px; }
+  .grid { display:grid; grid-template-columns: 340px 1fr; gap:18px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; }
+  h2 { font-size:13px; letter-spacing:.06em; text-transform:uppercase; color:var(--mute); margin:0 0 12px; }
+  label { display:block; font-size:13px; color:var(--mute); margin:10px 0 4px; }
+  input { width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:8px; font:inherit; background:#fff; color:var(--ink); }
+  .row { display:flex; gap:10px; margin-top:16px; }
+  button { flex:1; padding:11px 12px; border:0; border-radius:8px; font:inherit; font-weight:600; color:#fff; cursor:pointer; }
+  #call { background:var(--go); } #hang { background:var(--stop); }
+  button:disabled { opacity:.4; cursor:default; }
+  #status { margin-top:14px; font-size:14px; padding:8px 10px; border-radius:8px; background:var(--bg); }
+  #log { min-height:300px; max-height:520px; overflow:auto; display:flex; flex-direction:column; gap:8px; }
+  .msg { max-width:82%; padding:9px 12px; border-radius:12px; font-size:15px; }
+  .assistant { background:var(--bg); align-self:flex-start; }
+  .user { background:#dff3ea; align-self:flex-end; }
+  .who { display:block; font-size:11px; color:var(--mute); text-transform:uppercase; letter-spacing:.05em; }
+  .note { font-size:12px; color:var(--mute); margin-top:6px; }
+  hr { border:0; border-top:1px solid var(--line); margin:16px 0 6px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Demo Confirmation Agent</h1>
+  <p class="sub">An AI voice agent that confirms a booked demo. It receives the lead's details for each call.</p>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Lead for this call</h2>
+      <label for="name">Name</label><input id="name" value="Alex">
+      <label for="company">Company</label><input id="company" value="Northwind Analytics">
+      <label for="demo_date">Demo date</label><input id="demo_date" value="Thursday, November 19">
+      <label for="demo_time">Demo time</label><input id="demo_time" value="3:00 PM Eastern">
+      <div class="row">
+        <button id="call">Start call</button>
+        <button id="hang" disabled>End call</button>
+      </div>
+      <div id="status">Idle.</div>
+      <hr>
+      <label for="key">Vapi public key</label>
+      <input id="key" type="password" autocomplete="off" placeholder="paste it here">
+      <p class="note">Used only in this tab. It is not saved anywhere.</p>
+    </section>
+
+    <section class="card">
+      <h2>Live transcript</h2>
+      <div id="log"></div>
+    </section>
+  </div>
+</main>
+
+<script type="module">
+  // Vapi Web SDK from a CDN, pinned version. If the import fails, the status line says so.
+  const ASSISTANT_ID = "YOUR_ASSISTANT_ID";
+  const $ = (id) => document.getElementById(id);
+  const status = (t) => { $("status").textContent = t; };
+  // One open bubble per speaker: it fills with partial text and closes on the final transcript,
+  // so the last words stay visible even if the call ends first.
+  const live = { user: null, assistant: null };
+  const show = (role, text, final) => {
+    const r = role === "user" ? "user" : "assistant";
+    let d = live[r];
+    if (!d) {
+      d = document.createElement("div");
+      d.className = "msg " + r;
+      const w = document.createElement("span"); w.className = "who";
+      w.textContent = r === "user" ? "Lead" : "Agent";
+      d.append(w, document.createTextNode(""));
+      $("log").append(d); live[r] = d;
+    }
+    d.lastChild.textContent = text;
+    if (final) live[r] = null;
+    $("log").scrollTop = $("log").scrollHeight;
+  };
+
+  let Vapi = null, vapi = null;
+  try {
+    const mod = await import("https://cdn.jsdelivr.net/npm/@vapi-ai/web@3.1.1/+esm");
+    Vapi = typeof mod.default === "function" ? mod.default : mod.default?.default;
+    if (typeof Vapi !== "function") throw new Error("the SDK did not export a constructor");
+    status("Ready.");
+  } catch (e) {
+    status("Could not load the voice SDK: " + e.message);
+    $("call").disabled = true;
+  }
+
+  const idle = () => { $("call").disabled = false; $("hang").disabled = true; };
+
+  $("call").addEventListener("click", async () => {
+    const key = $("key").value.trim();
+    if (!key) { status("Paste the Vapi public key first."); return; }
+    $("log").replaceChildren(); live.user = null; live.assistant = null;
+    $("call").disabled = true;
+    status("Connecting. Allow the microphone if the browser asks.");
+    try {
+      vapi = new Vapi(key);
+      vapi.on("call-start", () => { status("Call in progress."); $("hang").disabled = false; });
+      vapi.on("call-end", () => { status("Call ended."); idle(); });
+      vapi.on("call-start-failed", (e) => { status("The call could not start: " + (e?.error || e?.message || "unknown reason")); idle(); });
+      vapi.on("error", (e) => { status("Error: " + (e?.error?.message || e?.message || JSON.stringify(e).slice(0, 200))); idle(); });
+      vapi.on("message", (m) => {
+        if (m.type === "transcript" && m.transcript) show(m.role, m.transcript, m.transcriptType === "final");
+      });
+      await vapi.start(ASSISTANT_ID, {
+        variableValues: {
+          name: $("name").value.trim(),
+          company: $("company").value.trim(),
+          demo_date: $("demo_date").value.trim(),
+          demo_time: $("demo_time").value.trim(),
+        },
+      });
+    } catch (e) {
+      status("Error: " + e.message); idle();
+    }
+  });
+
+  $("hang").addEventListener("click", () => { try { vapi?.stop(); } catch (_) {} });
+</script>
+</body>
+</html>
